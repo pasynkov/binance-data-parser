@@ -3,6 +3,7 @@
 
 # Build artifacts
 binance-data-parser
+test-binance-data-parser
 *.exe
 *.exe~
 *.dll

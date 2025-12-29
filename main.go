@@ -5,11 +5,15 @@ import (
 	"os"
 )
 
-func main() {
+func getGreeting() string {
 	word := os.Getenv("WORD")
 	if word == "" {
 		word = "World"
 	}
-	fmt.Printf("Hello %s\n", word)
+	return fmt.Sprintf("Hello %s", word)
+}
+
+func main() {
+	fmt.Println(getGreeting())
 }
 
