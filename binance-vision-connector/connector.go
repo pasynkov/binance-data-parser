@@ -94,6 +94,20 @@ func NewConnectorWithConfig(config *ConnectorConfig) *Connector {
 	}
 }
 
+// SetClient sets a custom HTTP client (useful for testing)
+func (c *Connector) SetClient(client *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.client = client
+}
+
+// Client returns the current HTTP client (useful for testing)
+func (c *Connector) Client() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.client
+}
+
 // DownloadTrades downloads and parses trade data for a given symbol and date
 func (c *Connector) DownloadTrades(ctx context.Context, symbol, year, month, day string) (*DownloadResult, error) {
 	// Format dates with zero-padding
