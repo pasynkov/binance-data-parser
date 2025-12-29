@@ -1,8 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 func main() {
-	fmt.Println("Hello, World!")
+	word := os.Getenv("WORD")
+	if word == "" {
+		word = "World"
+	}
+	fmt.Printf("Hello %s\n", word)
 }
 

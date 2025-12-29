@@ -1,0 +1,21 @@
+# Environment variables
+.env
+
+# Build artifacts
+binance-data-parser
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
