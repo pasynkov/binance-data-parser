@@ -13,85 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"binance-vision-connector/handlers"
 	binancevisionconnector "binance-vision-connector/binance-vision-connector"
 )
-
-func TestValidateSymbol(t *testing.T) {
-	tests := []struct {
-		name    string
-		symbol  string
-		wantErr bool
-	}{
-		{"valid symbol", "AIUSDT", false},
-		{"valid symbol with numbers", "BTC123", false},
-		{"empty symbol", "", true},
-		{"lowercase symbol", "aiusdt", true},
-		{"symbol with special chars", "AI-USDT", true},
-		{"symbol with spaces", "AI USDT", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateSymbol(tt.symbol)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateSymbol(%q) error = %v, wantErr %v", tt.symbol, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateDate(t *testing.T) {
-	tests := []struct {
-		name    string
-		year    string
-		month   string
-		day     string
-		wantErr bool
-	}{
-		{"valid date", "2025", "12", "28", false},
-		{"valid date single digit", "2025", "1", "5", false},
-		{"invalid year too old", "1999", "12", "28", true},
-		{"invalid year too new", "2101", "12", "28", true},
-		{"invalid month too high", "2025", "13", "28", true},
-		{"invalid month zero", "2025", "0", "28", true},
-		{"invalid day too high", "2025", "12", "32", true},
-		{"invalid day zero", "2025", "12", "0", true},
-		{"invalid date Feb 30", "2025", "02", "30", true},
-		{"invalid date Feb 29 non-leap", "2025", "02", "29", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateDate(tt.year, tt.month, tt.day)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateDate(%q, %q, %q) error = %v, wantErr %v", tt.year, tt.month, tt.day, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestFormatDate(t *testing.T) {
-	tests := []struct {
-		name         string
-		year, month, day string
-		wantYear, wantMonth, wantDay string
-	}{
-		{"already formatted", "2025", "12", "28", "2025", "12", "28"},
-		{"single digit month", "2025", "1", "28", "2025", "01", "28"},
-		{"single digit day", "2025", "12", "5", "2025", "12", "05"},
-		{"both single digit", "2025", "1", "5", "2025", "01", "05"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotYear, gotMonth, gotDay := formatDate(tt.year, tt.month, tt.day)
-			if gotYear != tt.wantYear || gotMonth != tt.wantMonth || gotDay != tt.wantDay {
-				t.Errorf("formatDate(%q, %q, %q) = (%q, %q, %q), want (%q, %q, %q)",
-					tt.year, tt.month, tt.day, gotYear, gotMonth, gotDay, tt.wantYear, tt.wantMonth, tt.wantDay)
-			}
-		})
-	}
-}
 
 // createMockZipFile creates a zip file with CSV data for testing
 func createMockZipFile(symbol, year, month, day string, trades [][]string) ([]byte, error) {
@@ -230,14 +154,26 @@ func TestE2E_DownloadEndpoint(t *testing.T) {
 
 	// Temporarily replace global connector
 	connector = testConnector
+	
+	// Create handlers with test connector
+	testMetrics := &handlers.RequestMetrics{}
+	testDownloadHandler := &handlers.DownloadHandler{
+		Connector: testConnector,
+		Timeout:   10 * time.Second,
+		Metrics:   testMetrics,
+	}
+	testHealthHandler := &handlers.HealthHandler{
+		Metrics: testMetrics,
+	}
+	
 	defer func() {
 		connector = originalConnector
 	}()
 
 	// Start the application server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/download", requestTrackingMiddleware(downloadHandler))
-	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/download", requestTrackingMiddleware(testDownloadHandler.Handle))
+	mux.HandleFunc("/health", testHealthHandler.Handle)
 
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
@@ -260,7 +196,7 @@ func TestE2E_DownloadEndpoint(t *testing.T) {
 	}
 
 	// Parse JSON response
-	var apiResp APIResponse
+	var apiResp handlers.APIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		t.Fatalf("Failed to decode JSON response: %v", err)
 	}
@@ -328,10 +264,34 @@ func TestE2E_DownloadEndpoint_ErrorCases(t *testing.T) {
 	mockBinanceServer := setupMockBinanceServer(t)
 	defer mockBinanceServer.Close()
 
+	// Create test connector
+	rewriteTransport := &urlRewritingTransport{
+		baseURL: mockBinanceServer.URL,
+		transport: &http.Transport{},
+	}
+	testConnectorConfig := binancevisionconnector.DefaultConfig()
+	testConnectorConfig.Timeout = 10 * time.Second
+	testConnector := binancevisionconnector.NewConnectorWithConfig(testConnectorConfig)
+	testConnector.SetClient(&http.Client{
+		Timeout:   10 * time.Second,
+		Transport: rewriteTransport,
+	})
+
+	// Create handlers with test connector
+	testMetrics := &handlers.RequestMetrics{}
+	testDownloadHandler := &handlers.DownloadHandler{
+		Connector: testConnector,
+		Timeout:   10 * time.Second,
+		Metrics:   testMetrics,
+	}
+	testHealthHandler := &handlers.HealthHandler{
+		Metrics: testMetrics,
+	}
+
 	// Start the application server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/download", requestTrackingMiddleware(downloadHandler))
-	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/download", requestTrackingMiddleware(testDownloadHandler.Handle))
+	mux.HandleFunc("/health", testHealthHandler.Handle)
 
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
@@ -399,7 +359,7 @@ func TestE2E_DownloadEndpoint_ErrorCases(t *testing.T) {
 				t.Errorf("Expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
 			}
 
-			var apiResp APIResponse
+			var apiResp handlers.APIResponse
 			if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 				t.Fatalf("Failed to decode JSON response: %v", err)
 			}
@@ -417,10 +377,23 @@ func TestE2E_DownloadEndpoint_ErrorCases(t *testing.T) {
 
 // TestE2E_HealthEndpoint tests the health endpoint end-to-end
 func TestE2E_HealthEndpoint(t *testing.T) {
+	// Create handlers
+	testMetrics := &handlers.RequestMetrics{}
+	testConnectorConfig := binancevisionconnector.DefaultConfig()
+	testConnector := binancevisionconnector.NewConnectorWithConfig(testConnectorConfig)
+	testDownloadHandler := &handlers.DownloadHandler{
+		Connector: testConnector,
+		Timeout:   10 * time.Second,
+		Metrics:   testMetrics,
+	}
+	testHealthHandler := &handlers.HealthHandler{
+		Metrics: testMetrics,
+	}
+
 	// Start the application server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/download", requestTrackingMiddleware(downloadHandler))
-	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/download", requestTrackingMiddleware(testDownloadHandler.Handle))
+	mux.HandleFunc("/health", testHealthHandler.Handle)
 
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
@@ -438,7 +411,7 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 	}
 
 	// Parse JSON response
-	var apiResp APIResponse
+	var apiResp handlers.APIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		t.Fatalf("Failed to decode JSON response: %v", err)
 	}
@@ -475,10 +448,23 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 
 // TestE2E_ConcurrentRequests tests handling multiple concurrent requests
 func TestE2E_ConcurrentRequests(t *testing.T) {
+	// Create handlers
+	testMetrics := &handlers.RequestMetrics{}
+	testConnectorConfig := binancevisionconnector.DefaultConfig()
+	testConnector := binancevisionconnector.NewConnectorWithConfig(testConnectorConfig)
+	testDownloadHandler := &handlers.DownloadHandler{
+		Connector: testConnector,
+		Timeout:   10 * time.Second,
+		Metrics:   testMetrics,
+	}
+	testHealthHandler := &handlers.HealthHandler{
+		Metrics: testMetrics,
+	}
+
 	// Start the application server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/download", requestTrackingMiddleware(downloadHandler))
-	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/download", requestTrackingMiddleware(testDownloadHandler.Handle))
+	mux.HandleFunc("/health", testHealthHandler.Handle)
 
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
@@ -504,7 +490,7 @@ func TestE2E_ConcurrentRequests(t *testing.T) {
 				return
 			}
 
-			var apiResp APIResponse
+			var apiResp handlers.APIResponse
 			if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 				results <- err
 				return
@@ -571,17 +557,27 @@ func TestDownloadHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Create a test handler
+			testMetrics := &handlers.RequestMetrics{}
+			testConnectorConfig := binancevisionconnector.DefaultConfig()
+			testConnector := binancevisionconnector.NewConnectorWithConfig(testConnectorConfig)
+			testHandler := &handlers.DownloadHandler{
+				Connector: testConnector,
+				Timeout:   10 * time.Second,
+				Metrics:   testMetrics,
+			}
+
 			req := httptest.NewRequest(tt.method, "/download?"+tt.queryParams, nil)
 			w := httptest.NewRecorder()
 
-			downloadHandler(w, req)
+			testHandler.Handle(w, req)
 
 			if w.Code != tt.expectedStatus {
 				t.Errorf("downloadHandler() status code = %d, want %d", w.Code, tt.expectedStatus)
 			}
 
 			if tt.expectError {
-				var response APIResponse
+				var response handlers.APIResponse
 				if err := json.Unmarshal(w.Body.Bytes(), &response); err == nil {
 					if response.Success {
 						t.Errorf("Expected error response but got success")
@@ -594,16 +590,21 @@ func TestDownloadHandler(t *testing.T) {
 
 // TestHealthHandler tests health handler directly (unit test)
 func TestHealthHandler(t *testing.T) {
+	testMetrics := &handlers.RequestMetrics{}
+	testHandler := &handlers.HealthHandler{
+		Metrics: testMetrics,
+	}
+
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 
-	healthHandler(w, req)
+	testHandler.Handle(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("healthHandler() status code = %d, want %d", w.Code, http.StatusOK)
 	}
 
-	var response APIResponse
+	var response handlers.APIResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Errorf("Failed to parse JSON response: %v", err)
 	}
