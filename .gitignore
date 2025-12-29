@@ -3,12 +3,17 @@
 
 # Build artifacts
 binance-data-parser
+binance-vision-connector
 test-binance-data-parser
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+
+# Temporary files and directories
+tmp/
+*.csv
 
 # IDE files
 .vscode
